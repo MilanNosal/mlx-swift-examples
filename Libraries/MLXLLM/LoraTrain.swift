@@ -280,8 +280,20 @@ public enum LoRATrain {
     /// - ``saveLoRAWeights(model:url:)``
     public static func loadLoRAWeights(model: Module, url: URL) throws {
         let weights = try ModuleParameters.unflattened(loadArrays(url: url))
+        
+        try Task.checkCancellation()
+        
         try model.update(parameters: weights, verify: .noUnusedKeys)
-        eval(model)
+        
+        try Task.checkCancellation()
+        
+        for batch in model.innerState().chunked(into: 3) {
+            if Task.isCancelled {
+                Stream.gpu.synchronize()
+                throw CancellationError()
+            }
+            eval(batch)
+        }
     }
 
     /// Given a model with LoRA adaptors applied, write adapter weights to a `.safetensors` file.

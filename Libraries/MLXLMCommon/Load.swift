@@ -94,12 +94,25 @@ public func loadWeights(
     try Task.checkCancellation()
     try model.update(parameters: parameters, verify: [.all])
 
-    try Task.checkCancellation()
-    try batchedEval(model)
+    for batch in model.innerState().chunked(into: 3) {
+        if Task.isCancelled {
+            Stream.gpu.synchronize()
+            throw CancellationError()
+        }
+        eval(batch)
+    }
 }
 
+public extension Array {
+    func chunked(into size: Int) -> [[Element]] {
+        let size = Swift.max(size, 1)
+        return stride(from: 0, to: count, by: size).map {
+            Array(self[$0..<Swift.min($0 + size, count)])
+        }
+    }
+}
 
-public func batchedEval(_ values: Any..., batchSize: Int = 5) throws {
+public func batchedEval(_ values: Any..., batchSize: Int = 3) throws {
     var arrays = [MLXArray]()
 
     for item in values {
@@ -107,7 +120,10 @@ public func batchedEval(_ values: Any..., batchSize: Int = 5) throws {
     }
     
     for batch in arrays.chunked(into: batchSize) {
-        try Task.checkCancellation()
+        if Task.isCancelled {
+            Stream.gpu.synchronize()
+            throw CancellationError()
+        }
         eval(batch)
     }
 }
@@ -155,13 +171,5 @@ private func collect(_ item: Any, into arrays: inout [MLXArray]) {
         break
     default:
         fatalError("Unable to extract MLXArray from \(item)")
-    }
-}
-
-extension Array {
-    func chunked(into size: Int) -> [[Element]] {
-        stride(from: 0, to: count, by: size).map {
-            Array(self[$0..<Swift.min($0 + size, count)])
-        }
     }
 }

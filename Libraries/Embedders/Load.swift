@@ -4,6 +4,7 @@ import Foundation
 @preconcurrency import Hub
 import MLX
 import MLXNN
+import MLXLMCommon
 import MLXRandom
 import Tokenizers
 
@@ -61,9 +62,13 @@ func loadSynchronous(modelDirectory: URL) throws -> EmbeddingModel {
     let configurationURL = modelDirectory.appending(component: "config.json")
     let baseConfig = try JSONDecoder().decode(
         BaseConfiguration.self, from: Data(contentsOf: configurationURL))
-
+    
+    try Task.checkCancellation()
+    
     let model = try baseConfig.modelType.createModel(configuration: configurationURL)
-
+    
+    try Task.checkCancellation()
+    
     // load the weights
     var weights = [String: MLXArray]()
     let enumerator = FileManager.default.enumerator(
@@ -79,6 +84,8 @@ func loadSynchronous(modelDirectory: URL) throws -> EmbeddingModel {
 
     // per-model cleanup
     weights = model.sanitize(weights: weights)
+    
+    try Task.checkCancellation()
 
     // quantize if needed
     if let quantization = baseConfig.quantization {
@@ -86,13 +93,24 @@ func loadSynchronous(modelDirectory: URL) throws -> EmbeddingModel {
             path, module in
             weights["\(path).scales"] != nil
         }
+        
+        try Task.checkCancellation()
     }
 
     // apply the loaded weights
     let parameters = ModuleParameters.unflattened(weights)
+    
+    try Task.checkCancellation()
+    
     try model.update(parameters: parameters, verify: [.all])
 
-    eval(model)
+    for batch in model.innerState().chunked(into: 3) {
+        if Task.isCancelled {
+            Stream.gpu.synchronize()
+            throw CancellationError()
+        }
+        eval(batch)
+    }
 
     return model
 }
