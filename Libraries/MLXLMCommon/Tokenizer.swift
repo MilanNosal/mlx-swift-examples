@@ -29,7 +29,9 @@ public func loadTokenizerConfig(configuration: ModelConfiguration, hub: HubApi) 
             // the load can fail (async when we try to use it)
             let loaded = LanguageModelConfigurationFromHub(
                 modelName: configuration.tokenizerId ?? id, hubApi: hub)
+            try Task.checkCancellation()
             _ = try await loaded.tokenizerConfig
+            try Task.checkCancellation()
             config = loaded
         } catch {
             let nserror = error as NSError
